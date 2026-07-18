@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quiet-star-prototype"
+version = "0.1.0"
+description = "Per-token hidden deliberation with KV-cache eviction, plus a Quiet-STaR-style think/talk/learn training loop"
+requires-python = ">=3.9"
+dependencies = [
+    "torch",
+    "transformers>=4.51.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
