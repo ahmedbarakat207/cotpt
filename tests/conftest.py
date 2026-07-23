@@ -26,7 +26,7 @@ def tiny_model(tiny_config):
 
 
 class MockTokenizer:
-    """Minimal stand-in exposing exactly the interface quiet_star.inference uses,
+    """Minimal stand-in exposing exactly the interface cotpt.inference uses,
     so generation can be tested without downloading a real tokenizer."""
 
     def __init__(self, vocab_size):

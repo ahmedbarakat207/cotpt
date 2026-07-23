@@ -3,7 +3,7 @@ from torch import nn
 
 
 class MixingHead(nn.Module):
-    """Quiet-STaR's 'talk head'. Learns how much weight to give the
+    """COTPT's 'talk head'. Learns how much weight to give the
     post-thought prediction vs. the plain no-thought prediction:
         mixed_hidden = (1 - w) * hidden_before + w * hidden_after
     Mixing happens on hidden states (post-final-norm), then the caller

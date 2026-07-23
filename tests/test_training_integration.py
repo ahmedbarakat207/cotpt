@@ -1,7 +1,7 @@
 import torch
 
-from quiet_star.mixing_head import MixingHead
-from quiet_star.training import quiet_star_training_step
+from cotpt.mixing_head import MixingHead
+from cotpt.training import cotpt_training_step
 
 
 def test_gradients_flow_into_model_and_mixing_head(tiny_model):
@@ -12,7 +12,7 @@ def test_gradients_flow_into_model_and_mixing_head(tiny_model):
     torch.manual_seed(1)
     input_ids = torch.randint(0, model.config.vocab_size, (1, 20))
 
-    stats = quiet_star_training_step(
+    stats = cotpt_training_step(
         model, mixing_head, input_ids,
         num_think_positions=4, num_rollouts=3, thought_length=5, lookahead=4,
     )
@@ -47,7 +47,7 @@ def test_overfitting_a_fixed_example_reduces_loss(tiny_model):
     losses, aux_losses = [], []
     for step in range(50):
         torch.manual_seed(100 + step)
-        stats = quiet_star_training_step(
+        stats = cotpt_training_step(
             model, mixing_head, fixed_input_ids,
             num_think_positions=4, num_rollouts=3, thought_length=5, lookahead=4,
         )
@@ -70,7 +70,7 @@ def test_short_sequence_falls_back_gracefully(tiny_model):
     mixing_head = MixingHead(hidden_size=model.config.hidden_size)
 
     short_ids = torch.randint(0, model.config.vocab_size, (1, 3))
-    stats = quiet_star_training_step(
+    stats = cotpt_training_step(
         model, mixing_head, short_ids,
         num_think_positions=4, num_rollouts=3, thought_length=5, lookahead=4,
     )

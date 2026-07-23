@@ -1,3 +1,9 @@
 torch
 transformers>=4.51.0
 pytest
+
+# optional -- install if you use the corresponding feature:
+# peft, accelerate   (--use-lora)
+# datasets           (--hf-dataset)
+# wandb              (--use-wandb)
+

@@ -1,6 +1,6 @@
 import torch
 
-from quiet_star.training import reinforce_loss_fn
+from cotpt.training import reinforce_loss_fn
 
 
 def test_reinforce_favors_highest_reward_action():

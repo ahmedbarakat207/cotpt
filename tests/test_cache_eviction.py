@@ -1,8 +1,8 @@
 import torch
 from transformers import DynamicCache
 
-from quiet_star.inference import forward_step
-from quiet_star.model_utils import sample_token
+from cotpt.inference import forward_step
+from cotpt.model_utils import sample_token
 
 
 def test_eviction_is_bit_exact(tiny_model):
@@ -63,7 +63,7 @@ def test_eviction_is_bit_exact(tiny_model):
 def test_generate_with_hidden_deliberation_runs(tiny_model, mock_tokenizer):
     """The public generation function runs end to end without error, with and
     without showing hidden thoughts, and num_hidden_tokens=0 degrades gracefully."""
-    from quiet_star.inference import generate_with_hidden_deliberation
+    from cotpt.inference import generate_with_hidden_deliberation
 
     for show, num_hidden in [(True, 5), (False, 3), (True, 0)]:
         result = generate_with_hidden_deliberation(

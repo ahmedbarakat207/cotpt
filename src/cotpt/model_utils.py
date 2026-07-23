@@ -14,7 +14,7 @@ def pick_device() -> str:
 
 def load_model_and_tokenizer(model_id: str, device: str):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto").to(device)
+    model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto").to(device)
     model.eval()
     return model, tokenizer
 
