@@ -7,7 +7,7 @@ think/talk/learn training loop** with several RL stability improvements, an
 engineering around all three (LoRA, dataset loading, logging, checkpoint
 resume).
 
-Three things you can do here:
+Four things you can do here:
 
 1. **Generate** (`scripts/generate.py`): for every visible output token, the
    model secretly generates a few hidden "thinking" tokens, uses them to pick
@@ -16,33 +16,10 @@ Three things you can do here:
    hidden thoughts stop being arbitrary continuations and start being tokens
    it has gradient-based incentive to make useful.
 3. **Evaluate** (`scripts/evaluate.py`): compare no-thinking, evicted hidden
-   deliberation, and plain visible chain-of-thought on the same metric, so
-   "does this help" has an actual answer instead of an assumption.
-
-## Project structure
-
-```
-cotpt/
-├── pyproject.toml, requirements.txt
-├── src/cotpt/
-│   ├── config.py            # every tunable constant, one source of truth
-│   ├── data.py                # mock prompt + built-in toy training corpus
-│   ├── eval_data.py            # held-out eval problems (disjoint from data.py)
-│   ├── dataset.py               # local .txt / HF `datasets` loading for real data
-│   ├── model_utils.py            # device pick, model/tokenizer load, sampling, EOS
-│   ├── mixing_head.py             # the "talk head" -- blends with/without-thought predictions
-│   ├── value_head.py               # per-token REINFORCE baseline (actor-critic)
-│   ├── inference.py                 # eviction loop (Steps A-F) + adaptive/mixing-head variant
-│   ├── training.py                   # think/talk/learn, with value baseline / KL / entropy
-│   ├── evaluation.py                  # no_think vs hidden_deliberation vs visible_cot
-│   ├── checkpoint_utils.py             # save/resume: model (or LoRA adapter), heads, optimizer, step
-│   └── logging_utils.py                 # JSONL (+ optional wandb) metrics logging
-├── scripts/
-│   ├── generate.py           # CLI: eviction loop, optionally with the trained mixing head
-│   ├── train.py                # CLI: think/talk/learn training, all features flag-controlled
-│   └── evaluate.py              # CLI: the 3-condition comparison
-└── tests/                     # pytest suite, runs against a tiny dummy model, no download needed
-```
+   deliberation, and plain visible chain-of-thought on teacher-forced log-likelihood.
+4. **Benchmark** (`scripts/benchmark.py`): run full task-solving generation to
+   compare accuracy (%), peak KV cache size, latency, and throughput across normal
+   and COTPT conditions.
 
 ## Setup
 
@@ -57,7 +34,13 @@ pip install -e ".[all]"          # everything, including pytest
 ## Quickstart
 
 ```bash
-# Generate with the aggressive-eviction loop
+# Interactive chat with per-token hidden deliberation
+python main.py
+
+# Chat with trained checkpoint and adaptive deliberation
+python main.py --model-id ./checkpoints/qwen3-0.6b-cotpt --use-mixing-head
+
+# Single prompt generation with aggressive-eviction loop
 python scripts/generate.py
 
 # Train (bare defaults: value baseline + KL penalty (frozen reference copy) +
@@ -75,8 +58,15 @@ python scripts/generate.py --model-id ./checkpoints/qwen3-0.6b-cotpt \
 # Does any of this help? Compare against the two baselines it needs to beat
 python scripts/evaluate.py --model-id ./checkpoints/qwen3-0.6b-cotpt --verbose
 
-# Real data instead of the 8 built-in toy problems
-python scripts/train.py --data-path ./my_corpus.txt --num-steps 500
+# End-to-end benchmark: accuracy (%), peak KV cache size, latency, tok/sec
+python scripts/benchmark.py --model-id ./checkpoints/qwen3-0.6b-cotpt \
+    --use-mixing-head --conditions normal_direct,normal_cot,cotpt_hidden,cotpt_adaptive
+
+# Train on GSM8K reasoning data (default: entropy-guided position picking)
+python scripts/train.py --dataset-name gsm8k --num-steps 100
+
+# Train with direct-answer latent CoT (forces 100% of reasoning into hidden tokens)
+python scripts/train.py --dataset-name gsm8k_direct --num-steps 100
 
 # Resume a run
 python scripts/train.py --resume-from ./checkpoints/qwen3-0.6b-cotpt --num-steps 500
@@ -153,21 +143,24 @@ training is healthy. Watch `aux_lm_loss` (down), `value_loss` (down), and
 `mean_reward` (up) instead -- that's what `scripts/train.py`'s logging and
 `tests/test_rl_improvements.py` actually check.
 
-**Deliberate simplifications vs. the paper**, and why:
-- Positions to think at are a random *subset* per example (all rollouts
-  *within* one position are still batched together), rather than every token
-  in parallel via the paper's custom attention-mask trick -- a throughput
-  optimization, not a correctness one.
-- The built-in corpus (`cotpt.data.TRAIN_TEXTS`) is 8 short original word
-  problems (arithmetic double-checked), not a real dataset. Use `--data-path`
-  or `--hf-dataset` for real data.
+**Deliberate optimizations for per-token thinking**:
+- **Entropy-Guided Thinking Positions (`--position-strategy entropy`)**:
+  Rather than deliberating at random syntax tokens ("the", "is", "a"), positions are sampled proportional to base model prediction entropy. This focuses hidden deliberation specifically on calculation results, reasoning branch points, and high-uncertainty tokens where latent computation provides positive reward.
+- **Reasoning Datasets for Latent CoT (`--dataset-name`)**:
+  - `gsm8k`: 7,473 multi-step arithmetic derivations where calculation tokens require internal scratchpad calculation.
+  - `gsm8k_direct`: Question-to-answer format with zero visible CoT tokens, forcing 100% of reasoning into the hidden thought tokens before emitting the answer.
+  - `math`: Deep multi-step competition mathematics (Algebra, Prealgebra, etc.) from Hendrycks MATH.
+  - `math_direct`: Competition math targeting direct answer prediction without visible scratchpad.
+  - `mmlu`: Multiple-choice college mathematics, formal logic, and STEM reasoning problems.
+  - `arc`: AI2 Reasoning Challenge questions testing deduction and causal reasoning.
+  - `svamp`: Math word problems with structural and linguistic variations.
+  - `fineweb_edu`: High-educational-value scientific and educational deductions.
 
 **Engineering**: `--use-lora` wraps the model with `peft` (also makes the KL
 reference nearly free); `--gradient-accumulation-steps` for a larger
 effective batch without more memory; `--checkpoint-every N` for periodic
 saves, `--resume-from <dir>` to continue a run (restores model/adapter
-weights, both heads, optimizer state, and step count); `--data-path`/
-`--hf-dataset` for real data instead of the toy corpus; `--use-wandb` mirrors
+weights, both heads, optimizer state, and step count); `--use-wandb` mirrors
 metrics to Weights & Biases if installed, and JSONL logging
 (`<output-dir>/train_log.jsonl`) always happens regardless.
 
@@ -191,6 +184,37 @@ Run `scripts/evaluate.py` before and after training on the same eval set to
 see whether training moved anything, and don't over-read a result from an
 untrained model, a lightly-trained run, or this small a held-out set (6
 problems) -- it's a harness, not a benchmark.
+
+## Benchmarking (`cotpt.benchmark` / `scripts/benchmark.py`)
+
+While `evaluation.py` measures teacher-forced log-likelihood of pre-written
+reference solutions, `benchmark.py` evaluates **real task-solving generation**:
+does the model produce the correct final answer, and what is the memory and
+latency cost of hidden deliberation vs. visible reasoning?
+
+Supported conditions:
+- `normal_direct`: Prompt -> greedy/sampled generation without any thinking tokens.
+- `normal_cot`: Prompt + "Let's think step by step." -> full visible reasoning chain.
+- `cotpt_hidden`: Prompt -> per-token hidden deliberation with aggressive KV-cache eviction.
+- `cotpt_adaptive`: Prompt -> adaptive deliberation using the trained `MixingHead` and entropy gating.
+
+Key metrics tracked per condition:
+- **Accuracy (%)**: Automated answer extraction (regex/pattern matching for numbers, boxed answers, or conclusion phrases) evaluated against ground-truth targets.
+- **Peak KV-Cache Length**: Confirms COTPT's primary systems advantage -- the KV cache stays bounded to visible tokens + hidden window, avoiding the linear memory blowup of long visible chains-of-thought.
+- **Final KV-Cache Length**: The permanent memory retained after generation completes.
+- **Wall-Clock Latency & Visible Tok/s**: Generation time and user-perceived speed.
+- **Forward Steps**: Total computation cost (visible + hidden passes).
+
+```bash
+# Benchmark default model on built-in math/reasoning problems
+python scripts/benchmark.py --limit 5
+
+# Export formatted Markdown table and JSON metrics
+python scripts/benchmark.py --output-markdown benchmark_results.md --output-json benchmark_results.json
+
+# Test a custom dataset (JSON or JSONL)
+python scripts/benchmark.py --dataset-path my_benchmark.jsonl
+```
 
 ## What's actually been validated
 

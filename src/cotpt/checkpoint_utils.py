@@ -1,8 +1,3 @@
-"""Save/resume for a full training run: base model (or LoRA adapter) weights
-via the standard HF/peft mechanisms, plus the mixing head, optional value
-head, optimizer state, and step count alongside them.
-"""
-
 import json
 import os
 
@@ -17,10 +12,18 @@ def is_lora_checkpoint(checkpoint_dir: str) -> bool:
     return os.path.exists(os.path.join(checkpoint_dir, "adapter_config.json"))
 
 
-def save_checkpoint(output_dir, model, tokenizer, mixing_head, value_head=None,
-                     optimizer=None, step: int = 0, extra_meta: dict = None):
+def save_checkpoint(
+    output_dir,
+    model,
+    tokenizer,
+    mixing_head,
+    value_head=None,
+    optimizer=None,
+    step: int = 0,
+    extra_meta: dict = None,
+):
     os.makedirs(output_dir, exist_ok=True)
-    model.save_pretrained(output_dir)   # for a peft model, this saves only the adapter weights + config
+    model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
     torch.save(mixing_head.state_dict(), os.path.join(output_dir, "mixing_head.pt"))
     if value_head is not None:
@@ -34,16 +37,12 @@ def save_checkpoint(output_dir, model, tokenizer, mixing_head, value_head=None,
         json.dump(meta, f)
 
 
-def load_checkpoint_for_resume(checkpoint_dir: str, base_model_id: str, device: str,
-                                use_value_head: bool = False):
-    """Reconstructs model/tokenizer/mixing_head/(value_head)/step from a
-    checkpoint written by save_checkpoint. hidden_size is read off the
-    reloaded model's own config, not supplied by the caller, so there's no
-    chance of constructing the heads with the wrong shape before their
-    weights are loaded. The caller still needs to build the optimizer
-    (needs the reconstructed model/head parameters to exist first) and then
-    call `optimizer.load_state_dict(result["optimizer_state_dict"])`.
-    """
+def load_checkpoint_for_resume(
+    checkpoint_dir: str,
+    base_model_id: str,
+    device: str,
+    use_value_head: bool = False,
+):
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
 
     if is_lora_checkpoint(checkpoint_dir):

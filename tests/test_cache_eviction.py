@@ -6,8 +6,6 @@ from cotpt.model_utils import sample_token
 
 
 def test_eviction_is_bit_exact(tiny_model):
-    """Grow the cache with hidden tokens, crop back, and confirm the result
-    is numerically identical to a cache that never saw the hidden tokens."""
     model = tiny_model
     torch.manual_seed(1)
     prompt_ids = torch.randint(0, model.config.vocab_size, (1, 7))
@@ -32,7 +30,7 @@ def test_eviction_is_bit_exact(tiny_model):
 
         assert cache.get_seq_length() == checkpoint_len + num_hidden
 
-        real_id = sample_token(logits, temperature=0.0, do_sample=False)  # greedy, deterministic
+        real_id = sample_token(logits, temperature=0.0, do_sample=False)
 
         cache.crop(checkpoint_len)
         assert cache.get_seq_length() == checkpoint_len
@@ -43,7 +41,6 @@ def test_eviction_is_bit_exact(tiny_model):
 
     assert cache.get_seq_length() == prompt_ids.shape[1] + num_visible
 
-    # Reference: a plain forward pass over ONLY prompt + committed real tokens.
     full_seq = torch.cat([prompt_ids, torch.tensor([committed_real_tokens])], dim=1)
     ref_cache = DynamicCache(config=model.config)
     with torch.no_grad():
@@ -61,8 +58,6 @@ def test_eviction_is_bit_exact(tiny_model):
 
 
 def test_generate_with_hidden_deliberation_runs(tiny_model, mock_tokenizer):
-    """The public generation function runs end to end without error, with and
-    without showing hidden thoughts, and num_hidden_tokens=0 degrades gracefully."""
     from cotpt.inference import generate_with_hidden_deliberation
 
     for show, num_hidden in [(True, 5), (False, 3), (True, 0)]:

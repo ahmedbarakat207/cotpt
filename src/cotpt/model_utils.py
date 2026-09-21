@@ -1,7 +1,10 @@
-"""Small helpers shared by inference and training."""
+import json
+import os
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from .config import MODEL_ID
 
 
 def pick_device() -> str:
@@ -13,14 +16,23 @@ def pick_device() -> str:
 
 
 def load_model_and_tokenizer(model_id: str, device: str):
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto").to(device)
+    if os.path.isdir(model_id) and os.path.exists(os.path.join(model_id, "adapter_config.json")):
+        from peft import PeftModel
+        with open(os.path.join(model_id, "adapter_config.json")) as f:
+            cfg = json.load(f)
+        base_id = cfg.get("base_model_name_or_path") or MODEL_ID
+        tok_id = model_id if os.path.exists(os.path.join(model_id, "tokenizer_config.json")) else base_id
+        tokenizer = AutoTokenizer.from_pretrained(tok_id)
+        base_model = AutoModelForCausalLM.from_pretrained(base_id, dtype="auto").to(device)
+        model = PeftModel.from_pretrained(base_model, model_id)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(model_id, dtype="auto").to(device)
     model.eval()
     return model, tokenizer
 
 
 def sample_token(logits: torch.Tensor, temperature: float, do_sample: bool) -> torch.Tensor:
-    """logits: [1, vocab_size] -> a [1]-shaped LongTensor token id."""
     if not do_sample or temperature <= 0:
         return torch.argmax(logits, dim=-1)
     probs = torch.softmax(logits / temperature, dim=-1)
@@ -28,8 +40,6 @@ def sample_token(logits: torch.Tensor, temperature: float, do_sample: bool) -> t
 
 
 def is_eos(token_id: int, tokenizer, model) -> bool:
-    """Handles models (like most Qwen chat variants) that define multiple
-    stop tokens via generation_config in addition to tokenizer.eos_token_id."""
     eos_ids = set()
     if tokenizer.eos_token_id is not None:
         ids = tokenizer.eos_token_id

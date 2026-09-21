@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""Run full COTPT-style think/talk/learn training.
-
-Usage:
-    python scripts/train.py
-    python scripts/train.py --num-steps 200 --output-dir ./checkpoints/my-run
-    python scripts/train.py --use-lora --use-kl-penalty
-    python scripts/train.py --data-path ./my_corpus.txt
-    python scripts/train.py --resume-from ./checkpoints/my-run
-
-See README.md for what each flag does and what this deliberately simplifies
-vs. the COTPT paper, and for the validation this went through before
-being included in this project.
-"""
 import argparse
 import copy
 import os
@@ -20,34 +7,38 @@ import random
 import torch
 
 from cotpt import config
-from cotpt.data import TRAIN_TEXTS
-from cotpt.dataset import load_training_texts
-from cotpt.model_utils import pick_device, load_model_and_tokenizer
-from cotpt.mixing_head import MixingHead
-from cotpt.value_head import ValueHead
-from cotpt.training import cotpt_training_step
+from cotpt.checkpoint_utils import load_checkpoint_for_resume, save_checkpoint
+from cotpt.data import load_training_texts, load_gsm8k, find_prompt_boundary
 from cotpt.logging_utils import ExperimentLogger
-from cotpt.checkpoint_utils import save_checkpoint, load_checkpoint_for_resume
+from cotpt.mixing_head import MixingHead
+from cotpt.model_utils import load_model_and_tokenizer, pick_device
+from cotpt.training import cotpt_training_step
+from cotpt.value_head import ValueHead
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default=config.MODEL_ID)
     parser.add_argument("--output-dir", default=config.OUTPUT_DIR)
-    parser.add_argument("--resume-from", default=None,
-                         help="checkpoint dir written by a previous run of this script; "
-                              "restores model/adapter weights, heads, optimizer state, and step count")
-    parser.add_argument("--data-path", default=None, help="local .txt file, paragraphs separated by blank lines")
-    parser.add_argument("--hf-dataset", default=None, help="HF datasets name, e.g. 'gsm8k' (needs `pip install datasets`)")
+    parser.add_argument("--resume-from", default=None)
+    parser.add_argument("--data-path", default=None)
+    parser.add_argument("--hf-dataset", default=None)
     parser.add_argument("--hf-split", default="train")
     parser.add_argument("--hf-text-field", default="text")
+    parser.add_argument(
+        "--dataset-name",
+        default="gsm8k",
+        choices=["gsm8k", "gsm8k_direct", "math", "math_direct", "mmlu", "arc", "svamp", "fineweb_edu"],
+    )
+    parser.add_argument("--data-mode", default="step_by_step", choices=["step_by_step", "direct_answer"])
+    parser.add_argument("--position-strategy", default="entropy", choices=["entropy", "uniform"])
 
     parser.add_argument("--num-steps", type=int, default=config.NUM_TRAINING_STEPS)
     parser.add_argument("--num-rollouts", type=int, default=config.NUM_ROLLOUTS)
     parser.add_argument("--num-think-positions", type=int, default=config.NUM_THINK_POSITIONS)
     parser.add_argument("--lookahead", type=int, default=config.LOOKAHEAD)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=config.GRADIENT_ACCUMULATION_STEPS)
-    parser.add_argument("--checkpoint-every", type=int, default=0, help="0 disables intermediate checkpoints")
+    parser.add_argument("--checkpoint-every", type=int, default=0)
 
     parser.add_argument("--base-lr", type=float, default=config.BASE_LR)
     parser.add_argument("--mix-head-lr", type=float, default=config.MIX_HEAD_LR)
@@ -68,7 +59,7 @@ def build_arg_parser():
 
     parser.add_argument("--use-wandb", action="store_true")
     parser.add_argument("--wandb-project", default="cotpt")
-    parser.add_argument("--log-file", default=None, help="defaults to <output-dir>/train_log.jsonl")
+    parser.add_argument("--log-file", default=None)
 
     parser.add_argument("--seed", type=int, default=config.SEED)
     return parser
@@ -79,7 +70,6 @@ def main():
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
-
     device = pick_device()
 
     ref_model = None
@@ -89,10 +79,10 @@ def main():
     optimizer_state_dict = None
 
     if args.resume_from:
-        print(f"Resuming from {args.resume_from} ...")
-        # hidden_size is discovered from the reloaded model itself below.
         result = load_checkpoint_for_resume(
-            args.resume_from, base_model_id=args.model_id, device=device,
+            args.resume_from,
+            base_model_id=args.model_id,
+            device=device,
             use_value_head=args.use_value_baseline,
         )
         model, tokenizer = result["model"], result["tokenizer"]
@@ -106,16 +96,17 @@ def main():
         optimizer_state_dict = result["optimizer_state_dict"]
         start_step = result["step"]
     else:
-        print(f"Loading {args.model_id} on {device} ...")
         model, tokenizer = load_model_and_tokenizer(args.model_id, device)
         if args.use_lora:
             from peft import LoraConfig, get_peft_model
             lora_cfg = LoraConfig(
-                task_type="CAUSAL_LM", target_modules=config.LORA_TARGET_MODULES,
-                r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=config.LORA_DROPOUT,
+                task_type="CAUSAL_LM",
+                target_modules=config.LORA_TARGET_MODULES,
+                r=args.lora_r,
+                lora_alpha=args.lora_alpha,
+                lora_dropout=config.LORA_DROPOUT,
             )
             model = get_peft_model(model, lora_cfg)
-            model.print_trainable_parameters()
         mixing_head = MixingHead(model.config.hidden_size).to(device)
         if args.use_value_baseline:
             value_head = ValueHead(model.config.hidden_size).to(device)
@@ -124,18 +115,13 @@ def main():
 
     if args.use_kl_penalty:
         if args.use_lora:
-            use_disable_adapter = True  # nearly free: reuses the same weights via disable_adapter()
-            print("KL penalty: using the LoRA base weights (via disable_adapter()) as the reference "
-                  "-- no extra model copy.")
+            use_disable_adapter = True
         elif config.USE_FROZEN_REFERENCE_WHEN_NO_LORA:
-            print("KL penalty requested without LoRA: building a frozen reference copy of the model "
-                  "(roughly doubles model memory; pass --no-kl-penalty or use --use-lora to avoid this).")
             ref_model = copy.deepcopy(model)
             ref_model.eval()
             for p in ref_model.parameters():
                 p.requires_grad_(False)
         else:
-            print("KL penalty requested but USE_FROZEN_REFERENCE_WHEN_NO_LORA is False -- disabling KL penalty.")
             args.use_kl_penalty = False
 
     param_groups = [
@@ -153,22 +139,23 @@ def main():
         trainable_params += list(value_head.parameters())
 
     texts = load_training_texts(
-        data_path=args.data_path, hf_dataset=args.hf_dataset,
-        hf_split=args.hf_split, hf_text_field=args.hf_text_field,
+        data_path=args.data_path,
+        hf_dataset=args.hf_dataset,
+        hf_split=args.hf_split,
+        hf_text_field=args.hf_text_field,
+        dataset_name=args.dataset_name,
+        mode=args.data_mode,
     )
     if texts is None:
-        texts = TRAIN_TEXTS
-        print(f"No --data-path/--hf-dataset given; using the {len(texts)} built-in toy examples.")
-    else:
-        print(f"Loaded {len(texts)} training examples.")
+        texts = load_gsm8k()
 
     log_path = args.log_file or os.path.join(args.output_dir, "train_log.jsonl")
-    logger = ExperimentLogger(log_path, use_wandb=args.use_wandb, wandb_project=args.wandb_project,
-                               wandb_config=vars(args))
-
-    print(f"Training from step {start_step} to {args.num_steps} "
-          f"(gradient accumulation: {args.gradient_accumulation_steps}) ...")
-    print("=" * 78)
+    logger = ExperimentLogger(
+        log_path,
+        use_wandb=args.use_wandb,
+        wandb_project=args.wandb_project,
+        wandb_config=vars(args),
+    )
 
     optimizer.zero_grad()
     accum_counter = 0
@@ -180,13 +167,24 @@ def main():
             step += 1
             continue
 
+        min_pos = find_prompt_boundary(text, tokenizer) or 0
         stats = cotpt_training_step(
-            model, mixing_head, input_ids,
-            value_head=value_head, ref_model=ref_model, use_disable_adapter=use_disable_adapter,
-            num_think_positions=args.num_think_positions, num_rollouts=args.num_rollouts,
+            model,
+            mixing_head,
+            input_ids,
+            value_head=value_head,
+            ref_model=ref_model,
+            use_disable_adapter=use_disable_adapter,
+            num_think_positions=args.num_think_positions,
+            num_rollouts=args.num_rollouts,
             lookahead=args.lookahead,
-            use_value_baseline=args.use_value_baseline, use_kl_penalty=args.use_kl_penalty,
-            kl_coeff=args.kl_coeff, use_entropy_bonus=args.use_entropy_bonus, entropy_coeff=args.entropy_coeff,
+            use_value_baseline=args.use_value_baseline,
+            use_kl_penalty=args.use_kl_penalty,
+            kl_coeff=args.kl_coeff,
+            use_entropy_bonus=args.use_entropy_bonus,
+            entropy_coeff=args.entropy_coeff,
+            position_strategy=args.position_strategy,
+            min_position=min_pos,
         )
         (stats["total_loss"] / args.gradient_accumulation_steps).backward()
         accum_counter += 1
@@ -205,25 +203,19 @@ def main():
                 f"kl={stats['mean_kl']:.4f} entropy={stats['mean_entropy']:.3f} "
                 f"mix_w={stats['mean_mix_weight']:.3f}"
             )
-            logger.log(step, **{k: v for k, v in stats.items() if k != "total_loss"},
-                       total_loss=stats["total_loss"].item())
+            logger.log(
+                step,
+                **{k: v for k, v in stats.items() if k != "total_loss"},
+                total_loss=stats["total_loss"].item(),
+            )
 
         if args.checkpoint_every and step > 0 and step % args.checkpoint_every == 0:
-            print(f"  [checkpoint at step {step}]")
             save_checkpoint(args.output_dir, model, tokenizer, mixing_head, value_head, optimizer, step=step)
 
         step += 1
 
-    print("=" * 78)
-    print(f"\nSaving final checkpoint to {args.output_dir} ...")
     save_checkpoint(args.output_dir, model, tokenizer, mixing_head, value_head, optimizer, step=args.num_steps)
     logger.close()
-    print(f"Metrics logged to {log_path}")
-    print(f"\nTo generate with these weights using the aggressive-eviction loop, run:\n"
-          f"    python scripts/generate.py --model-id {args.output_dir}")
-    if value_head is not None or args.use_lora:
-        print("(mixing_head.pt / value_head.pt are saved alongside the model weights but aren't "
-              "picked up by plain from_pretrained -- see README for how generate.py --use-mixing-head loads them.)")
 
 
 if __name__ == "__main__":

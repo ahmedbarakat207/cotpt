@@ -1,7 +1,3 @@
-"""Local-first experiment logging: always writes JSONL (no account, no
-internet needed), optionally also mirrors to Weights & Biases if installed
-and requested."""
-
 import json
 import os
 
@@ -17,7 +13,7 @@ class ExperimentLogger:
                 import wandb
                 self.wandb_run = wandb.init(project=wandb_project or "cotpt", config=wandb_config or {})
             except ImportError:
-                print("wandb not installed (pip install wandb) -- continuing with JSONL-only logging.")
+                print("wandb not installed; logging to JSONL only.")
 
     def log(self, step: int, **metrics):
         record = {"step": step, **metrics}

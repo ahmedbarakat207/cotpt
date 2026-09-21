@@ -3,15 +3,6 @@ from torch import nn
 
 
 class MixingHead(nn.Module):
-    """COTPT's 'talk head'. Learns how much weight to give the
-    post-thought prediction vs. the plain no-thought prediction:
-        mixed_hidden = (1 - w) * hidden_before + w * hidden_after
-    Mixing happens on hidden states (post-final-norm), then the caller
-    projects the blend through the model's own lm_head to get logits.
-    (Verified empirically that a Qwen3 model's hidden_states[-1] is exactly
-    what its lm_head consumes -- no extra norm step needed here.)
-    """
-
     def __init__(self, hidden_size: int):
         super().__init__()
         self.net = nn.Sequential(
