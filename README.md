@@ -1,5 +1,7 @@
 # cotpt
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ahmedbarakat207/cotpt/blob/main/colab_demo.ipynb)
+
 A local PyTorch + Hugging Face `transformers` prototype of **per-token hidden
 deliberation with aggressive KV-cache eviction**, a **COTPT-style
 think/talk/learn training loop** with several RL stability improvements, an
