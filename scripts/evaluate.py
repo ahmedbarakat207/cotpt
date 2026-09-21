@@ -22,11 +22,15 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--num-hidden-tokens", type=int, default=config.NUM_HIDDEN_THOUGHT_TOKENS)
     parser.add_argument("--use-mixing-head", action="store_true")
+    parser.add_argument("--mixing-mode", default=config.MIXING_MODE, choices=["hidden", "logit"])
+    parser.add_argument("--use-thought-tokens", action="store_true", default=config.USE_THOUGHT_TOKENS)
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
     device = pick_device()
     model, tokenizer = load_model_and_tokenizer(args.model_id, device)
+    from cotpt.model_utils import get_thought_token_ids
+    start_id, end_id = get_thought_token_ids(tokenizer) if args.use_thought_tokens else (None, None)
 
     mixing_head = None
     if args.use_mixing_head:
@@ -46,6 +50,10 @@ def main():
         problems=problems,
         num_hidden_tokens=args.num_hidden_tokens,
         mixing_head=mixing_head,
+        mixing_mode=args.mixing_mode,
+        use_thought_tokens=args.use_thought_tokens,
+        start_thought_id=start_id,
+        end_thought_id=end_id,
     )
 
     if args.verbose:

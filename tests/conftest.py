@@ -32,13 +32,38 @@ class MockTokenizer:
     def __init__(self, vocab_size):
         self.vocab_size = vocab_size
         self.eos_token_id = None
+        self._special = {}
+
+    def __len__(self):
+        return self.vocab_size
+
+    def add_special_tokens(self, special_dict):
+        added = 0
+        for tok in special_dict.get("additional_special_tokens", []):
+            if tok not in self._special:
+                self._special[tok] = self.vocab_size
+                self.vocab_size += 1
+                added += 1
+        return added
+
+    def encode(self, text, add_special_tokens=False):
+        if text in self._special:
+            return [self._special[text]]
+        words = text.split()
+        base = self.vocab_size - len(self._special)
+        ids = [abs(hash(w)) % max(1, base) for w in words] or [0]
+        return ids
+
+    def convert_tokens_to_ids(self, token):
+        return self._special.get(token)
 
     def __call__(self, text, return_tensors="pt"):
-        words = text.split()
-        ids = [abs(hash(w)) % self.vocab_size for w in words] or [0]
-        return type("Enc", (), {"input_ids": torch.tensor([ids])})()
+        return type("Enc", (), {"input_ids": torch.tensor([self.encode(text)])})()
 
     def decode(self, ids, skip_special_tokens=True):
+        special_ids = set(self._special.values())
+        if skip_special_tokens:
+            ids = [i for i in ids if i not in special_ids]
         return " ".join(f"<{i}>" for i in ids)
 
 

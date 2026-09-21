@@ -28,6 +28,8 @@ def main():
     parser.add_argument("--max-visible-tokens", type=int, default=config.MAX_VISIBLE_TOKENS)
     parser.add_argument("--use-mixing-head", action="store_true")
     parser.add_argument("--entropy-threshold", type=float, default=None)
+    parser.add_argument("--mixing-mode", default=config.MIXING_MODE, choices=["hidden", "logit"])
+    parser.add_argument("--use-thought-tokens", action="store_true", default=config.USE_THOUGHT_TOKENS)
     parser.add_argument("--no-likelihood", action="store_true")
     parser.add_argument("--output-json", default=None)
     parser.add_argument("--output-markdown", default=None)
@@ -42,6 +44,8 @@ def main():
     device = pick_device()
     print(f"Loading {args.model_id} on {device}...")
     model, tokenizer = load_model_and_tokenizer(args.model_id, device)
+    from cotpt.model_utils import get_thought_token_ids
+    start_id, end_id = get_thought_token_ids(tokenizer) if args.use_thought_tokens else (None, None)
 
     mixing_head = None
     if args.use_mixing_head or "cotpt_adaptive" in conditions:
@@ -70,6 +74,10 @@ def main():
         entropy_threshold=args.entropy_threshold,
         compute_likelihood=not args.no_likelihood,
         verbose=args.verbose,
+        mixing_mode=args.mixing_mode,
+        use_thought_tokens=args.use_thought_tokens,
+        start_thought_id=start_id,
+        end_thought_id=end_id,
     )
 
     summary = results["summary"]

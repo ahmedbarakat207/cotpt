@@ -14,6 +14,7 @@ from .config import (
     REAL_TOKEN_TEMPERATURE,
     THINKING_DO_SAMPLE,
     THINKING_TEMPERATURE,
+    MIXING_MODE,
 )
 from .eval_data import BENCHMARK_PROBLEMS, VISIBLE_COT_SUFFIX
 from .evaluation import (
@@ -22,7 +23,7 @@ from .evaluation import (
     evaluate_visible_cot,
 )
 from .inference import evict_hidden_tokens, forward_step, forward_step_with_hidden
-from .mixing_head import MixingHead
+from .mixing_head import MixingHead, blend_logits
 from .model_utils import is_eos, sample_token
 
 
@@ -159,6 +160,9 @@ def generate_cotpt_deliberation(
     thinking_do_sample: bool = THINKING_DO_SAMPLE,
     real_temperature: float = REAL_TOKEN_TEMPERATURE,
     real_do_sample: bool = REAL_TOKEN_DO_SAMPLE,
+    use_thought_tokens: bool = False,
+    start_thought_id: int = None,
+    end_thought_id: int = None,
 ) -> Dict[str, Any]:
     device = next(model.parameters()).device
     prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
@@ -174,14 +178,23 @@ def generate_cotpt_deliberation(
     num_visible = 0
     peak_kv_len = cache.get_seq_length()
     forward_steps = prompt_ids.shape[1]
+    bracket = use_thought_tokens and num_hidden_tokens > 0 and start_thought_id is not None and end_thought_id is not None
 
     for _ in range(max_visible_tokens):
         checkpoint_len = cache.get_seq_length()
 
         logits = last_logits
+        if bracket:
+            cache, logits = forward_step(model, torch.tensor(start_thought_id, device=device), cache)
+            forward_steps += 1
+            peak_kv_len = max(peak_kv_len, cache.get_seq_length())
         for _ in range(num_hidden_tokens):
             hidden_token = sample_token(logits, thinking_temperature, thinking_do_sample)
             cache, logits = forward_step(model, hidden_token, cache)
+            forward_steps += 1
+            peak_kv_len = max(peak_kv_len, cache.get_seq_length())
+        if bracket:
+            cache, logits = forward_step(model, torch.tensor(end_thought_id, device=device), cache)
             forward_steps += 1
             peak_kv_len = max(peak_kv_len, cache.get_seq_length())
 
@@ -227,6 +240,10 @@ def generate_cotpt_adaptive(
     thinking_do_sample: bool = THINKING_DO_SAMPLE,
     real_temperature: float = REAL_TOKEN_TEMPERATURE,
     real_do_sample: bool = REAL_TOKEN_DO_SAMPLE,
+    mixing_mode: str = MIXING_MODE,
+    use_thought_tokens: bool = False,
+    start_thought_id: int = None,
+    end_thought_id: int = None,
 ) -> Dict[str, Any]:
     device = next(model.parameters()).device
     prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
@@ -268,16 +285,34 @@ def generate_cotpt_adaptive(
 
         num_thought_tokens += 1
         logits = last_logits
+        base_logits = last_logits
         post_thought_hidden = last_hidden
+        device = last_logits.device
+        bracket = use_thought_tokens and num_hidden_tokens > 0 and start_thought_id is not None and end_thought_id is not None
+        if bracket:
+            cache, logits, post_thought_hidden = forward_step_with_hidden(
+                model, torch.tensor(start_thought_id, device=device), cache
+            )
+            forward_steps += 1
+            peak_kv_len = max(peak_kv_len, cache.get_seq_length())
         for _ in range(num_hidden_tokens):
             hidden_token = sample_token(logits, thinking_temperature, thinking_do_sample)
             cache, logits, post_thought_hidden = forward_step_with_hidden(model, hidden_token, cache)
             forward_steps += 1
             peak_kv_len = max(peak_kv_len, cache.get_seq_length())
+        if bracket:
+            cache, logits, post_thought_hidden = forward_step_with_hidden(
+                model, torch.tensor(end_thought_id, device=device), cache
+            )
+            forward_steps += 1
+            peak_kv_len = max(peak_kv_len, cache.get_seq_length())
 
         w = mixing_head(last_hidden, post_thought_hidden)
-        mixed_hidden = (1 - w) * last_hidden + w * post_thought_hidden
-        mixed_logits = model.lm_head(mixed_hidden)
+        if mixing_mode == "logit":
+            mixed_logits = blend_logits(w, base_logits, logits)
+        else:
+            mixed_hidden = (1 - w) * last_hidden + w * post_thought_hidden
+            mixed_logits = model.lm_head(mixed_hidden)
 
         real_token = sample_token(mixed_logits, real_temperature, real_do_sample)
         real_token_id = real_token.item()
@@ -445,6 +480,10 @@ def run_benchmark(
     entropy_threshold: Optional[float] = None,
     compute_likelihood: bool = True,
     verbose: bool = False,
+    mixing_mode: str = MIXING_MODE,
+    use_thought_tokens: bool = False,
+    start_thought_id: int = None,
+    end_thought_id: int = None,
 ) -> Dict[str, Any]:
     problems = problems if problems is not None else BENCHMARK_PROBLEMS
     conditions = conditions if conditions is not None else DEFAULT_CONDITIONS
@@ -501,9 +540,16 @@ def run_benchmark(
                     q,
                     num_hidden_tokens=num_hidden_tokens,
                     max_visible_tokens=max_visible_tokens,
+                    use_thought_tokens=use_thought_tokens,
+                    start_thought_id=start_thought_id,
+                    end_thought_id=end_thought_id,
                 )
                 log_lik = (
-                    evaluate_hidden_deliberation(model, tokenizer, q, ref_ans, num_hidden_tokens=num_hidden_tokens)
+                    evaluate_hidden_deliberation(
+                        model, tokenizer, q, ref_ans, num_hidden_tokens=num_hidden_tokens,
+                        mixing_mode=mixing_mode, use_thought_tokens=use_thought_tokens,
+                        start_thought_id=start_thought_id, end_thought_id=end_thought_id,
+                    )
                     if compute_likelihood and ref_ans
                     else None
                 )
@@ -516,6 +562,10 @@ def run_benchmark(
                     entropy_threshold=entropy_threshold,
                     num_hidden_tokens=num_hidden_tokens,
                     max_visible_tokens=max_visible_tokens,
+                    mixing_mode=mixing_mode,
+                    use_thought_tokens=use_thought_tokens,
+                    start_thought_id=start_thought_id,
+                    end_thought_id=end_thought_id,
                 )
                 log_lik = None
             else:

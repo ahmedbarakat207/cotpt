@@ -48,9 +48,20 @@ def load_checkpoint_for_resume(
     if is_lora_checkpoint(checkpoint_dir):
         from peft import PeftModel
         base_model = AutoModelForCausalLM.from_pretrained(base_model_id, dtype="auto").to(device)
+        try:
+            # If tokenizer was extended with thought tokens, resize base vocab first.
+            if len(tokenizer) != base_model.get_input_embeddings().weight.shape[0]:
+                base_model.resize_token_embeddings(len(tokenizer))
+        except Exception:
+            pass
         model = PeftModel.from_pretrained(base_model, checkpoint_dir, is_trainable=True)
     else:
         model = AutoModelForCausalLM.from_pretrained(checkpoint_dir, dtype="auto").to(device)
+    try:
+        if len(tokenizer) != model.get_input_embeddings().weight.shape[0]:
+            model.resize_token_embeddings(len(tokenizer))
+    except Exception:
+        pass
     model.train()
     hidden_size = model.config.hidden_size
 

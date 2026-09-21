@@ -9,7 +9,9 @@ from .config import (
     REAL_TOKEN_TEMPERATURE,
     REAL_TOKEN_DO_SAMPLE,
     SHOW_HIDDEN_THOUGHTS,
+    MIXING_MODE,
 )
+from .mixing_head import blend_logits
 from .model_utils import sample_token, is_eos
 
 
@@ -49,6 +51,9 @@ def generate_with_hidden_deliberation(
     real_do_sample: bool = REAL_TOKEN_DO_SAMPLE,
     show_hidden_thoughts: bool = SHOW_HIDDEN_THOUGHTS,
     print_prompt: bool = True,
+    use_thought_tokens: bool = False,
+    start_thought_id: int = None,
+    end_thought_id: int = None,
 ) -> str:
     device = next(model.parameters()).device
     prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
@@ -62,16 +67,23 @@ def generate_with_hidden_deliberation(
     if print_prompt:
         print(prompt, end="", flush=True)
     generated_text = ""
+    bracket = use_thought_tokens and num_hidden_tokens > 0 and start_thought_id is not None and end_thought_id is not None
 
     for _ in range(max_visible_tokens):
         checkpoint_len = cache.get_seq_length()
 
         hidden_ids = []
         logits = last_logits
+        if bracket:
+            start_tok = torch.tensor(start_thought_id, device=device)
+            cache, logits = forward_step(model, start_tok, cache)
         for _ in range(num_hidden_tokens):
             hidden_token = sample_token(logits, thinking_temperature, thinking_do_sample)
             cache, logits = forward_step(model, hidden_token, cache)
             hidden_ids.append(hidden_token.item())
+        if bracket:
+            end_tok = torch.tensor(end_thought_id, device=device)
+            cache, logits = forward_step(model, end_tok, cache)
 
         real_token = sample_token(logits, real_temperature, real_do_sample)
         real_token_id = real_token.item()
@@ -109,6 +121,10 @@ def generate_with_adaptive_deliberation(
     show_hidden_thoughts: bool = SHOW_HIDDEN_THOUGHTS,
     entropy_threshold: float = None,
     print_prompt: bool = True,
+    mixing_mode: str = MIXING_MODE,
+    use_thought_tokens: bool = False,
+    start_thought_id: int = None,
+    end_thought_id: int = None,
 ) -> str:
     device = next(model.parameters()).device
     prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
@@ -150,14 +166,25 @@ def generate_with_adaptive_deliberation(
         hidden_ids = []
         logits = last_logits
         post_thought_hidden = last_hidden
+        device = last_logits.device
+        bracket = use_thought_tokens and num_hidden_tokens > 0 and start_thought_id is not None and end_thought_id is not None
+        if bracket:
+            start_tok = torch.tensor(start_thought_id, device=device)
+            cache, logits, post_thought_hidden = forward_step_with_hidden(model, start_tok, cache)
         for _ in range(num_hidden_tokens):
             hidden_token = sample_token(logits, thinking_temperature, thinking_do_sample)
             cache, logits, post_thought_hidden = forward_step_with_hidden(model, hidden_token, cache)
             hidden_ids.append(hidden_token.item())
+        if bracket:
+            end_tok = torch.tensor(end_thought_id, device=device)
+            cache, logits, post_thought_hidden = forward_step_with_hidden(model, end_tok, cache)
 
         w = mixing_head(last_hidden, post_thought_hidden)
-        mixed_hidden = (1 - w) * last_hidden + w * post_thought_hidden
-        mixed_logits = model.lm_head(mixed_hidden)
+        if mixing_mode == "logit":
+            mixed_logits = blend_logits(w, last_logits, logits)
+        else:
+            mixed_hidden = (1 - w) * last_hidden + w * post_thought_hidden
+            mixed_logits = model.lm_head(mixed_hidden)
         real_token = sample_token(mixed_logits, real_temperature, real_do_sample)
         real_token_id = real_token.item()
 

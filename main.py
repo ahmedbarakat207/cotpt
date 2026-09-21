@@ -11,7 +11,7 @@ from cotpt.inference import (
     generate_with_hidden_deliberation,
 )
 from cotpt.mixing_head import MixingHead
-from cotpt.model_utils import load_model_and_tokenizer, pick_device
+from cotpt.model_utils import get_thought_token_ids, load_model_and_tokenizer, pick_device
 
 
 def build_arg_parser():
@@ -33,6 +33,8 @@ def build_arg_parser():
         help="Opt back into the base model's visible <think> reasoning. "
         "Default (off) disables it, since COTPT's hidden deliberation replaces visible thinking.",
     )
+    parser.add_argument("--mixing-mode", default=config.MIXING_MODE, choices=["hidden", "logit"])
+    parser.add_argument("--use-thought-tokens", action="store_true", default=config.USE_THOUGHT_TOKENS)
     return parser
 
 
@@ -70,6 +72,8 @@ def main():
 
     print(f"Loading {args.model_id} on {device}...")
     model, tokenizer = load_model_and_tokenizer(args.model_id, device)
+    thought_ids = get_thought_token_ids(tokenizer) if args.use_thought_tokens else (None, None)
+    start_thought_id, end_thought_id = thought_ids
 
     mixing_head = None
     if args.use_mixing_head:
@@ -151,6 +155,10 @@ def main():
                 show_hidden_thoughts=show_thoughts,
                 entropy_threshold=args.entropy_threshold,
                 print_prompt=False,
+                mixing_mode=args.mixing_mode,
+                use_thought_tokens=args.use_thought_tokens,
+                start_thought_id=start_thought_id,
+                end_thought_id=end_thought_id,
             )
         else:
             response = generate_with_hidden_deliberation(
@@ -164,6 +172,9 @@ def main():
                 real_do_sample=args.sample_real_token,
                 show_hidden_thoughts=show_thoughts,
                 print_prompt=False,
+                use_thought_tokens=args.use_thought_tokens,
+                start_thought_id=start_thought_id,
+                end_thought_id=end_thought_id,
             )
 
         messages.append({"role": "assistant", "content": response.strip()})

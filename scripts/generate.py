@@ -8,7 +8,7 @@ from cotpt import config
 from cotpt.data import DEFAULT_PROMPT
 from cotpt.inference import generate_with_adaptive_deliberation, generate_with_hidden_deliberation
 from cotpt.mixing_head import MixingHead
-from cotpt.model_utils import load_model_and_tokenizer, pick_device
+from cotpt.model_utils import get_thought_token_ids, load_model_and_tokenizer, pick_device
 
 
 def main():
@@ -23,10 +23,13 @@ def main():
     parser.add_argument("--hide-hidden-thoughts", dest="show_hidden_thoughts", action="store_false", default=config.SHOW_HIDDEN_THOUGHTS)
     parser.add_argument("--use-mixing-head", action="store_true")
     parser.add_argument("--entropy-threshold", type=float, default=None)
+    parser.add_argument("--mixing-mode", default=config.MIXING_MODE, choices=["hidden", "logit"])
+    parser.add_argument("--use-thought-tokens", action="store_true", default=config.USE_THOUGHT_TOKENS)
     args = parser.parse_args()
 
     device = pick_device()
     model, tokenizer = load_model_and_tokenizer(args.model_id, device)
+    start_id, end_id = get_thought_token_ids(tokenizer) if args.use_thought_tokens else (None, None)
 
     if args.use_mixing_head:
         mixing_head_path = os.path.join(args.model_id, "mixing_head.pt")
@@ -45,6 +48,10 @@ def main():
             real_do_sample=args.sample_real_token,
             show_hidden_thoughts=args.show_hidden_thoughts,
             entropy_threshold=args.entropy_threshold,
+            mixing_mode=args.mixing_mode,
+            use_thought_tokens=args.use_thought_tokens,
+            start_thought_id=start_id,
+            end_thought_id=end_id,
         )
     else:
         generate_with_hidden_deliberation(
@@ -57,6 +64,9 @@ def main():
             real_temperature=args.real_token_temperature,
             real_do_sample=args.sample_real_token,
             show_hidden_thoughts=args.show_hidden_thoughts,
+            use_thought_tokens=args.use_thought_tokens,
+            start_thought_id=start_id,
+            end_thought_id=end_id,
         )
 
 

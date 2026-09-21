@@ -37,6 +37,14 @@ KL_COEFF = 0.05
 USE_ENTROPY_BONUS = True
 ENTROPY_COEFF = 0.01
 
+# Quiet-STaR-faithful options (all default off for backward compatibility)
+USE_THOUGHT_TOKENS = False
+START_THOUGHT_TOKEN = "<|startofthought|>"
+END_THOUGHT_TOKEN = "<|endofthought|>"
+MIXING_MODE = "hidden"  # "hidden" (blend hiddens then lm_head) or "logit" (blend logits, Quiet-STaR)
+USE_DIFFERENTIAL_REWARD = False
+USE_POSITIVE_ONLY_REINFORCE = False
+
 USE_LORA = False
 LORA_R = 8
 LORA_ALPHA = 16

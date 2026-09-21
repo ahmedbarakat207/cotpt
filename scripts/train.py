@@ -11,7 +11,7 @@ from cotpt.checkpoint_utils import load_checkpoint_for_resume, save_checkpoint
 from cotpt.data import load_training_texts, load_gsm8k, find_prompt_boundary
 from cotpt.logging_utils import ExperimentLogger
 from cotpt.mixing_head import MixingHead
-from cotpt.model_utils import load_model_and_tokenizer, pick_device
+from cotpt.model_utils import ensure_thought_tokens, get_thought_token_ids, load_model_and_tokenizer, pick_device
 from cotpt.training import cotpt_training_step
 from cotpt.value_head import ValueHead
 
@@ -57,6 +57,16 @@ def build_arg_parser():
     parser.add_argument("--no-entropy-bonus", dest="use_entropy_bonus", action="store_false")
     parser.add_argument("--entropy-coeff", type=float, default=config.ENTROPY_COEFF)
 
+    parser.add_argument("--use-thought-tokens", action="store_true", default=config.USE_THOUGHT_TOKENS)
+    parser.add_argument("--no-thought-tokens", dest="use_thought_tokens", action="store_false")
+    parser.add_argument("--start-thought-token", default=config.START_THOUGHT_TOKEN)
+    parser.add_argument("--end-thought-token", default=config.END_THOUGHT_TOKEN)
+    parser.add_argument("--mixing-mode", default=config.MIXING_MODE, choices=["hidden", "logit"])
+    parser.add_argument("--use-differential-reward", action="store_true", default=config.USE_DIFFERENTIAL_REWARD)
+    parser.add_argument("--no-differential-reward", dest="use_differential_reward", action="store_false")
+    parser.add_argument("--positive-only-reinforce", action="store_true", default=config.USE_POSITIVE_ONLY_REINFORCE)
+    parser.add_argument("--no-positive-only-reinforce", dest="positive_only_reinforce", action="store_false")
+
     parser.add_argument("--use-wandb", action="store_true")
     parser.add_argument("--wandb-project", default="cotpt")
     parser.add_argument("--log-file", default=None)
@@ -96,7 +106,12 @@ def main():
         optimizer_state_dict = result["optimizer_state_dict"]
         start_step = result["step"]
     else:
-        model, tokenizer = load_model_and_tokenizer(args.model_id, device)
+        model, tokenizer = load_model_and_tokenizer(
+            args.model_id, device,
+            use_thought_tokens=args.use_thought_tokens,
+            start_thought_token=args.start_thought_token,
+            end_thought_token=args.end_thought_token,
+        )
         if args.use_lora:
             from peft import LoraConfig, get_peft_model
             lora_cfg = LoraConfig(
@@ -110,6 +125,20 @@ def main():
         mixing_head = MixingHead(model.config.hidden_size).to(device)
         if args.use_value_baseline:
             value_head = ValueHead(model.config.hidden_size).to(device)
+
+    start_thought_id, end_thought_id = None, None
+    if args.use_thought_tokens:
+        # Resume path: tokenizer already saved with tokens; ensure model vocab matches.
+        try:
+            start_thought_id, end_thought_id = ensure_thought_tokens(
+                tokenizer, model, args.start_thought_token, args.end_thought_token
+            )
+        except Exception:
+            start_thought_id, end_thought_id = get_thought_token_ids(
+                tokenizer, args.start_thought_token, args.end_thought_token
+            )
+        if start_thought_id is None or end_thought_id is None:
+            print("Warning: --use-thought-tokens set but thought tokens unavailable; continuing without brackets.")
 
     model.train()
 
@@ -185,6 +214,11 @@ def main():
             entropy_coeff=args.entropy_coeff,
             position_strategy=args.position_strategy,
             min_position=min_pos,
+            mixing_mode=args.mixing_mode,
+            use_differential_reward=args.use_differential_reward,
+            use_positive_only=args.positive_only_reinforce,
+            start_thought_id=start_thought_id,
+            end_thought_id=end_thought_id,
         )
         (stats["total_loss"] / args.gradient_accumulation_steps).backward()
         accum_counter += 1
