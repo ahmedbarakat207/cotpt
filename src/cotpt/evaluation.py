@@ -5,7 +5,7 @@ from transformers import DynamicCache
 
 from .config import NUM_HIDDEN_THOUGHT_TOKENS, THINKING_TEMPERATURE, THINKING_DO_SAMPLE
 from .eval_data import EVAL_PROBLEMS, VISIBLE_COT_SUFFIX
-from .inference import forward_step, forward_step_with_hidden
+from .inference import evict_hidden_tokens, forward_step, forward_step_with_hidden
 from .mixing_head import MixingHead
 from .model_utils import sample_token
 
@@ -73,7 +73,7 @@ def evaluate_hidden_deliberation(
         log_prob = F.log_softmax(logits, dim=-1)[0, target_id.item()]
         log_probs_collected.append(log_prob.item())
 
-        cache.crop(checkpoint_len)
+        evict_hidden_tokens(cache, checkpoint_len)
         assert cache.get_seq_length() == checkpoint_len
 
         if mixing_head is not None:

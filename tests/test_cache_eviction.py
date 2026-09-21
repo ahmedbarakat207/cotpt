@@ -1,7 +1,7 @@
 import torch
 from transformers import DynamicCache
 
-from cotpt.inference import forward_step
+from cotpt.inference import evict_hidden_tokens, forward_step
 from cotpt.model_utils import sample_token
 
 
@@ -32,7 +32,7 @@ def test_eviction_is_bit_exact(tiny_model):
 
         real_id = sample_token(logits, temperature=0.0, do_sample=False)
 
-        cache.crop(checkpoint_len)
+        evict_hidden_tokens(cache, checkpoint_len)
         assert cache.get_seq_length() == checkpoint_len
 
         cache, last_logits = forward_step(model, real_id, cache)

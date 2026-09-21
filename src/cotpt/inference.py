@@ -25,6 +25,18 @@ def forward_step_with_hidden(model, token_id: torch.Tensor, cache: DynamicCache)
     return out.past_key_values, out.logits[:, -1, :], out.hidden_states[-1][:, -1, :]
 
 
+def evict_hidden_tokens(cache: DynamicCache, checkpoint_len: int) -> None:
+    """Evict hidden-thought tokens added after ``checkpoint_len``.
+
+    Uses the negative ``crop(-n)`` form ("remove n tokens") instead of the
+    deprecated positive ``crop(length)`` form, which logs a warning on every
+    step in current transformers and will be removed in 5.18.
+    """
+    to_evict = cache.get_seq_length() - checkpoint_len
+    if to_evict > 0:
+        cache.crop(-to_evict)
+
+
 def generate_with_hidden_deliberation(
     model,
     tokenizer,
@@ -71,7 +83,7 @@ def generate_with_hidden_deliberation(
             thought_text = tokenizer.decode(hidden_ids, skip_special_tokens=True)
             print(f"\033[2m\u27ea{thought_text}\u27eb\033[0m", end="", flush=True)
 
-        cache.crop(checkpoint_len)
+        evict_hidden_tokens(cache, checkpoint_len)
         assert cache.get_seq_length() == checkpoint_len
 
         cache, last_logits = forward_step(model, real_token, cache)
@@ -156,7 +168,7 @@ def generate_with_adaptive_deliberation(
             thought_text = tokenizer.decode(hidden_ids, skip_special_tokens=True)
             print(f"\033[2m\u27ea{thought_text}, w={w.item():.2f}\u27eb\033[0m", end="", flush=True)
 
-        cache.crop(checkpoint_len)
+        evict_hidden_tokens(cache, checkpoint_len)
         assert cache.get_seq_length() == checkpoint_len
 
         cache, last_logits, last_hidden = forward_step_with_hidden(model, real_token, cache)

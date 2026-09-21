@@ -21,7 +21,7 @@ from .evaluation import (
     evaluate_no_think,
     evaluate_visible_cot,
 )
-from .inference import forward_step, forward_step_with_hidden
+from .inference import evict_hidden_tokens, forward_step, forward_step_with_hidden
 from .mixing_head import MixingHead
 from .model_utils import is_eos, sample_token
 
@@ -188,10 +188,10 @@ def generate_cotpt_deliberation(
         real_token = sample_token(logits, real_temperature, real_do_sample)
         real_token_id = real_token.item()
         if is_eos(real_token_id, tokenizer, model):
-            cache.crop(checkpoint_len)
+            evict_hidden_tokens(cache, checkpoint_len)
             break
 
-        cache.crop(checkpoint_len)
+        evict_hidden_tokens(cache, checkpoint_len)
         assert cache.get_seq_length() == checkpoint_len
 
         cache, last_logits = forward_step(model, real_token, cache)
@@ -282,11 +282,11 @@ def generate_cotpt_adaptive(
         real_token = sample_token(mixed_logits, real_temperature, real_do_sample)
         real_token_id = real_token.item()
         if is_eos(real_token_id, tokenizer, model):
-            cache.crop(checkpoint_len)
+            evict_hidden_tokens(cache, checkpoint_len)
             num_visible -= 1
             break
 
-        cache.crop(checkpoint_len)
+        evict_hidden_tokens(cache, checkpoint_len)
         assert cache.get_seq_length() == checkpoint_len
 
         cache, last_logits, last_hidden = forward_step_with_hidden(model, real_token, cache)

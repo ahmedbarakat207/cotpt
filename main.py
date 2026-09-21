@@ -26,16 +26,33 @@ def build_arg_parser():
     parser.add_argument("--hide-hidden-thoughts", dest="show_hidden_thoughts", action="store_false", default=config.SHOW_HIDDEN_THOUGHTS)
     parser.add_argument("--entropy-threshold", type=float, default=None)
     parser.add_argument("--system-prompt", default="You are a helpful, logically rigorous assistant.")
+    parser.add_argument(
+        "--enable-thinking",
+        action="store_true",
+        default=False,
+        help="Opt back into the base model's visible <think> reasoning. "
+        "Default (off) disables it, since COTPT's hidden deliberation replaces visible thinking.",
+    )
     return parser
 
 
-def format_chat_prompt(tokenizer, messages, fallback_system=""):
+def format_chat_prompt(tokenizer, messages, fallback_system="", enable_thinking=False):
     has_chat_template = getattr(tokenizer, "chat_template", None) is not None
     if has_chat_template:
         try:
-            return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            # Qwen3-style templates default to visible thinking mode, which collides
+            # with COTPT's per-token hidden deliberation (model tries to emit a coherent
+            # <think> chain while we perturb every step with hidden tokens -> degenerate
+            # repetition). Disable it by default so hidden thoughts replace visible CoT.
+            # Extra kwargs are ignored by templates that don't support them.
+            return tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True, enable_thinking=enable_thinking
+            )
         except Exception:
-            pass
+            try:
+                return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            except Exception:
+                pass
 
     formatted = ""
     if fallback_system:
@@ -114,7 +131,9 @@ def main():
             continue
 
         messages.append({"role": "user", "content": user_input})
-        prompt = format_chat_prompt(tokenizer, messages, fallback_system=args.system_prompt)
+        prompt = format_chat_prompt(
+            tokenizer, messages, fallback_system=args.system_prompt, enable_thinking=args.enable_thinking
+        )
 
         print("\033[1;32mAssistant:\033[0m ", end="", flush=True)
 
